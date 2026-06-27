@@ -205,6 +205,16 @@
 
   .btn-primary:hover { background: rgba(26,35,126,0.7); }
 
+  .sync-status {
+    margin-top: 8px;
+    font-size: 12px;
+    text-align: center;
+    color: var(--muted);
+    min-height: 16px;
+  }
+  .sync-status.pending { color: var(--yellow); }
+  .sync-status.synced  { color: var(--green); }
+
   .btn-danger {
     background: transparent;
     border: 1px solid var(--border);
@@ -729,6 +739,7 @@
         </div>
       </div>
       <button class="btn btn-primary" onclick="addEntry()">+ Add Entry</button>
+      <div id="syncStatus" class="sync-status"></div>
     </div>
 
     <div class="section-title">Monthly Log &mdash; <span id="monthLogYear"></span></div>
@@ -807,6 +818,70 @@ const MONTHS = ['January','February','March','April','May','June',
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun',
                       'Jul','Aug','Sep','Oct','Nov','Dec'];
 
+// ── Central submission (Google Sheet via Apps Script web app) ──
+// Paste the deployment URL you get from "Deploy > New deployment > Web app" here.
+const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbx7K35nhMcRlG64iSQ2a0TzG0wLrafiRmQ-X4MuYQgoqZiH6v1j6A26GHuU7WQV_Gy1KA/exec';
+// Must exactly match SHARED_SECRET in the Apps Script (Code.gs).
+const SHEET_SHARED_SECRET = '25359f31a3d9bfeb60dd32dc31c2e67517b7b67e342eb58d';
+
+// Entries that failed to reach the Sheet (e.g., no internet) are queued here
+// and retried automatically on reconnect or next time the app loads.
+function getPendingQueue() {
+  try { return JSON.parse(localStorage.getItem('sfpd_hours_pending_sync') || '[]'); }
+  catch { return []; }
+}
+function savePendingQueue(queue) {
+  localStorage.setItem('sfpd_hours_pending_sync', JSON.stringify(queue));
+}
+function removeFromPendingQueue(id) {
+  savePendingQueue(getPendingQueue().filter(item => item.entry.id !== id));
+}
+
+function renderSyncStatus() {
+  const el = document.getElementById('syncStatus');
+  if (!el) return;
+  const pending = getPendingQueue().length;
+  el.classList.remove('pending', 'synced');
+  if (!SHEET_WEBHOOK_URL || SHEET_WEBHOOK_URL.startsWith('PASTE_')) {
+    el.textContent = '';
+  } else if (pending > 0) {
+    el.textContent = `⏳ ${pending} entr${pending === 1 ? 'y' : 'ies'} waiting to sync`;
+    el.classList.add('pending');
+  } else {
+    el.textContent = '✓ All entries synced';
+    el.classList.add('synced');
+  }
+}
+
+function submitToSheet(entry, year) {
+  if (!SHEET_WEBHOOK_URL || SHEET_WEBHOOK_URL.startsWith('PASTE_')) return;
+  const queue = getPendingQueue();
+  if (!queue.some(item => item.entry.id === entry.id)) {
+    queue.push({ entry, year });
+    savePendingQueue(queue);
+  }
+  renderSyncStatus();
+  flushPendingQueue();
+}
+
+function flushPendingQueue() {
+  if (!SHEET_WEBHOOK_URL || SHEET_WEBHOOK_URL.startsWith('PASTE_')) return;
+  getPendingQueue().forEach(item => {
+    fetch(SHEET_WEBHOOK_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ token: SHEET_SHARED_SECRET, year: item.year, ...item.entry })
+    })
+      .then(() => { removeFromPendingQueue(item.entry.id); renderSyncStatus(); })
+      .catch(() => {}); // still offline — stays queued, retried next time
+  });
+}
+
+window.addEventListener('online', flushPendingQueue);
+flushPendingQueue();
+renderSyncStatus();
+
 let currentYear = new Date().getFullYear();
 
 function loadData() {
@@ -837,8 +912,10 @@ function addEntry() {
 
   const data = loadData();
   if (!data[currentYear]) data[currentYear] = [];
-  data[currentYear].push({ id: Date.now(), month, hours, task, note, name, star, medical, loa });
+  const entry = { id: Date.now(), month, hours, task, note, name, star, medical, loa };
+  data[currentYear].push(entry);
   saveData(data);
+  submitToSheet(entry, currentYear);
 
   document.getElementById('entryHours').value = '';
   document.getElementById('entryNote').value  = '';
