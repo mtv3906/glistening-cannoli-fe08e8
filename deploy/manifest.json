@@ -1,0 +1,16 @@
+{
+  "name": "SFPD Reserve Hours",
+  "short_name": "SFPD Hours",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#1a237e",
+  "icons": [
+    {
+      "src": "SFPD-Star.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
